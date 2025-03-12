@@ -3,6 +3,9 @@ import os
 import shutil
 import time
 import hashlib
+import winreg
+import string
+import subprocess
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QStatusBar, QProgressBar, QLabel, QPushButton, QVBoxLayout, QWidget, QMessageBox, QFileDialog, QLineEdit, QHBoxLayout, QFrame
 )
@@ -120,7 +123,7 @@ class CopyThread(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Epic Games Restore")
+        self.setWindowTitle("Epic Games ReStore")
         self.setWindowIcon(QIcon(":/icon.ico"))
         self.setGeometry(100, 100, 400, 300)
 
@@ -146,6 +149,10 @@ class MainWindow(QMainWindow):
         self.stop_button.setEnabled(False)
 
         self.status_label = QLabel("", self)
+
+        # Тестовая кнопка для запуска Epic Games
+        self.test_launch_button = QPushButton("Тест: Запустить Epic Games", self)
+        self.test_launch_button.clicked.connect(self.resume_epic)
 
         # Линия для визуального отделения статус бара
         self.line = QFrame()
@@ -174,6 +181,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.status_label)
         layout.addWidget(self.start_button)
         layout.addWidget(self.stop_button)
+        layout.addWidget(self.test_launch_button)  # Добавляем тестовую кнопку
         layout.addWidget(self.line)  # Добавляем линию
 
         container = QWidget()
@@ -189,6 +197,8 @@ class MainWindow(QMainWindow):
         self.timer = QTimer()  # Таймер для задержки
         self.delay_seconds = 5  # Задержка в 5 секунд
         self.remaining_delay = self.delay_seconds  # Оставшееся время задержки
+        self.epic_closed = False  # Флаг для отслеживания состояния Epic Games
+        self.is_copying = False  # Флаг для отслеживания состояния копирования
 
         # Инициализация полей
         self.epic_path_input.setText(self.epic_path)
@@ -207,12 +217,47 @@ class MainWindow(QMainWindow):
         self.watcher.directoryChanged.connect(self.on_directory_changed)
         self.timer.timeout.connect(self.update_delay)
 
+    def find_epic_games_path(self):
+        """Поиск пути к Epic Games Store на всех доступных дисках."""
+        # Стандартные пути
+        standard_paths = [
+            os.path.join(os.environ["ProgramFiles"], "Epic Games"),
+            os.path.join(os.environ["ProgramFiles(x86)"], "Epic Games"),
+        ]
+
+        # Проверка стандартных путей
+        for path in standard_paths:
+            launcher_path = os.path.join(path, "Launcher", "Portal", "Binaries", "Win32", "EpicGamesLauncher.exe")
+            if os.path.exists(launcher_path):
+                return os.path.dirname(launcher_path)
+
+        # Поиск в реестре
+        try:
+            reg_key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Epic Games\EpicGamesLauncher")
+            install_location = winreg.QueryValueEx(reg_key, "AppDataPath")[0]
+            if os.path.exists(os.path.join(install_location, "EpicGamesLauncher.exe")):
+                return install_location
+        except FileNotFoundError:
+            pass
+
+        # Поиск на всех доступных дисках
+        for drive in string.ascii_uppercase:
+            drive_path = f"{drive}:\\"
+            if os.path.exists(drive_path):  # Проверяем, существует ли диск
+                for root, dirs, files in os.walk(drive_path):
+                    if "EpicGamesLauncher.exe" in files:
+                        return root
+
+        return None
+
     def detect_epic_path(self):
-        """Автоматически определяет путь к Epic Games Store."""
-        default_path = "C:/Program Files (x86)/Epic Games/Launcher/Portal/Binaries/Win32/EpicGamesLauncher.exe"
-        if os.path.exists(default_path):
-            return os.path.dirname(default_path)  # Возвращаем каталог, а не exе
-        return ""
+        """Автоматическое определение пути к Epic Games Store."""
+        epic_path = self.find_epic_games_path()
+        if epic_path:
+            return epic_path
+        else:
+            QMessageBox.critical(self, "Ошибка", "Epic Games Store не найден на компьютере!")
+            return ""
 
     def select_epic_path(self):
         """Открывает диалог выбора каталога Epic Games Store."""
@@ -248,6 +293,9 @@ class MainWindow(QMainWindow):
 
     def on_directory_changed(self, path):
         """Обрабатывает изменения в каталоге."""
+        if self.is_copying:  # Если идет копирование, игнорируем изменения
+            return
+
         # Проверяем, появилась ли новая папка
         folders = [f for f in os.listdir(path) if os.path.isdir(os.path.join(path, f))]
         if folders:
@@ -270,7 +318,9 @@ class MainWindow(QMainWindow):
 
         if self.remaining_delay <= 0:
             self.timer.stop()
-            self.stop_epic()
+            if not self.epic_closed:
+                self.stop_epic()
+                self.epic_closed = True
             self.start_copy(self.usb_path, self.new_folder_path)
 
     def stop_epic(self):
@@ -287,12 +337,26 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", "Каталог для копирования не найден!")
             return
 
-        self.copy_thread = CopyThread(src, dst)
+        # Определяем имя папки на флешке
+        folder_name = os.path.basename(os.path.normpath(src))
+        # Создаем путь для копирования
+        dst_path = os.path.join(dst, folder_name)
+
+        self.is_copying = True  # Устанавливаем флаг копирования
+        self.watcher.removePath(self.epic_path)  # Отключаем отслеживание
+
+        self.copy_thread = CopyThread(src, dst_path)
         self.copy_thread.progress_updated.connect(self.update_progress)
-        self.copy_thread.copy_finished.connect(self.resume_epic)
+        self.copy_thread.copy_finished.connect(self.on_copy_finished)
         self.copy_thread.integrity_check_progress.connect(self.update_integrity_progress)
         self.copy_thread.start()
         self.status_bar.showMessage("Копирование")
+
+    def on_copy_finished(self):
+        """Обрабатывает завершение копирования."""
+        self.is_copying = False  # Сбрасываем флаг копирования
+        self.watcher.addPath(self.epic_path)  # Включаем отслеживание
+        self.resume_epic()
 
     def update_progress(self, progress, speed, remaining_time, copied_files):
         """Обновляет прогресс и статистику."""
@@ -323,8 +387,12 @@ class MainWindow(QMainWindow):
         """Возобновляет загрузку."""
         launcher_path = os.path.join(self.epic_path, "EpicGamesLauncher.exe")
         if os.path.exists(launcher_path):
-            os.startfile(launcher_path)
-            QMessageBox.information(self, "Успех", "Epic Games Store запущен. Загрузка возобновлена.")
+            try:
+                # Используем subprocess.Popen для запуска Epic Games Launcher
+                subprocess.Popen([launcher_path], shell=True)
+                QMessageBox.information(self, "Успех", "Epic Games Store запущен. Загрузка возобновлена.")
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось запустить Epic Games Store: {e}")
         else:
             QMessageBox.critical(self, "Ошибка", "Файл EpicGamesLauncher.exe не найден!")
 
