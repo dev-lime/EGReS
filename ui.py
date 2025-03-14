@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import subprocess
 import psutil
@@ -144,9 +145,45 @@ class MainWindow(QMainWindow):
         self.stop_button.clicked.connect(self.stop_monitoring)
         self.watcher.directoryChanged.connect(self.on_directory_changed)
         self.timer.timeout.connect(self.update_delay)
+        
+        # Загружаем сохраненные пути при запуске
+        self.settings_file = "settings.json"
+        self.load_settings()
 
         # Автоматически подбираем размер окна
         #self.adjustSize()
+
+    def load_settings(self):
+        """Загружает сохраненные настройки из файла."""
+        if os.path.exists(self.settings_file):
+            try:
+                with open(self.settings_file, "r", encoding="utf-8") as f:
+                    settings = json.load(f)
+                    self.epic_path = settings.get("epic_path", "")
+                    self.usb_path = settings.get("usb_path", "")
+            except Exception as e:
+                QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить настройки: {e}")
+                self.epic_path = self.detect_epic_path()
+                self.usb_path = self.get_farthest_drive()
+        else:
+            self.epic_path = self.detect_epic_path()
+            self.usb_path = self.get_farthest_drive()
+
+        # Устанавливаем значения в поля ввода
+        self.epic_path_input.setText(self.epic_path)
+        self.usb_path_input.setText(self.usb_path)
+
+    def save_settings(self):
+        """Сохраняет текущие настройки в файл."""
+        settings = {
+            "epic_path": self.epic_path_input.text(),
+            "usb_path": self.usb_path_input.text(),
+        }
+        try:
+            with open(self.settings_file, "w", encoding="utf-8") as f:
+                json.dump(settings, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить настройки: {e}")
 
     def set_widgets_enabled(self, enabled):
         """
@@ -209,6 +246,7 @@ class MainWindow(QMainWindow):
         if path:
             self.epic_path = path
             self.epic_path_input.setText(path)
+            self.save_settings()  # Сохраняем настройки после изменения
 
     def select_usb_path(self):
         """Открывает диалог выбора каталога на флешке."""
@@ -216,6 +254,12 @@ class MainWindow(QMainWindow):
         if path:
             self.usb_path = path
             self.usb_path_input.setText(path)
+            self.save_settings()  # Сохраняем настройки после изменения
+    
+    def closeEvent(self, event):
+        """Сохраняет настройки при закрытии программы."""
+        self.save_settings()
+        event.accept()
 
     def start_monitoring(self):
         """Начинает отслеживание каталога."""
