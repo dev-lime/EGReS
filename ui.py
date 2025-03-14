@@ -1,13 +1,15 @@
 import os
+import time
 import subprocess
+import psutil
 from PyQt5.QtWidgets import (
-    QMainWindow, QStatusBar, QProgressBar, QLabel, QPushButton, QVBoxLayout, QWidget, QMessageBox, QFileDialog, QLineEdit, QHBoxLayout, QFrame
+    QMainWindow, QStatusBar, QProgressBar, QLabel, QPushButton, QVBoxLayout, QWidget, QMessageBox, QFileDialog, QLineEdit, QHBoxLayout, QFrame, QGroupBox
 )
-from PyQt5.QtCore import QTimer, pyqtSignal, QFileSystemWatcher, Qt
+from PyQt5.QtCore import QTimer, QFileSystemWatcher, Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWinExtras import QWinTaskbarButton, QWinTaskbarProgress
+from PyQt5.QtWinExtras import QWinTaskbarButton
 from copy_thread import CopyThread  # Импортируем CopyThread из отдельного модуля
-from utils import find_epic_games_path  # Импортируем вспомогательные функции
+from utils import *
 
 
 class MainWindow(QMainWindow):
@@ -15,10 +17,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Epic Games ReStore")
         self.setWindowIcon(QIcon(":/icon.ico"))
-        self.setGeometry(100, 100, 400, 300)
+        self.setGeometry(100, 100, 400, 420)  # Начальные размеры окна
 
-        # Запрет на изменение размера окна и максимизацию
-        self.setFixedSize(400, 300)
+        self.setFixedSize(400, 420)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowMaximizeButtonHint)
 
         # Виджеты
@@ -32,6 +33,8 @@ class MainWindow(QMainWindow):
         self.usb_path_button = QPushButton("...", self)
         self.usb_path_button.setFixedSize(30, 20)
 
+        self.warning_label = QLabel("ВНИМАНИЕ! Имена каталогов должны совпадать", self)
+
         self.progress_bar = QProgressBar(self)
 
         self.start_button = QPushButton("Начать отслеживание", self)
@@ -40,17 +43,34 @@ class MainWindow(QMainWindow):
 
         self.status_label = QLabel("", self)
 
-        # Тестовая кнопка для запуска Epic Games
-        self.test_launch_button = QPushButton("Тест: Запустить Epic Games", self)
+        # Тестовые кнопки
+        self.test_launch_button = QPushButton("Запустить Epic Games", self)
         self.test_launch_button.clicked.connect(self.resume_epic)
+        
+        self.test_stop_button = QPushButton("Закрыть Epic Games", self)
+        self.test_stop_button.clicked.connect(self.stop_epic)
+        
+        self.test_games_button = QPushButton("Список установленных игр", self)
+        self.test_games_button.clicked.connect(lambda: show_games_info(*get_installed_games()))
 
-        # Линия для визуального отделения статус бара
+        # Создаем группу для тестовых кнопок
+        self.utilities_group = QGroupBox("Инструменты")
+
         self.line = QFrame()
         self.line.setFrameShape(QFrame.HLine)
         self.line.setFrameShadow(QFrame.Sunken)
 
+        # Создаем статус бар
         self.status_bar = QStatusBar()
+        self.status_bar.setStyleSheet("""
+            QStatusBar {
+                border-top: 1px solid gray;
+                background-color: #f0f0f0;  /* Цвет фона */
+                padding: 5px;  /* Отступы внутри статус бара */
+            }
+        """)
         self.setStatusBar(self.status_bar)
+        self.status_bar.setSizeGripEnabled(False)
         self.status_bar.showMessage("Ожидание")
 
         # Макет
@@ -62,17 +82,29 @@ class MainWindow(QMainWindow):
         usb_layout.addWidget(self.usb_path_input)
         usb_layout.addWidget(self.usb_path_button)
 
+        # Горизонтальный макет для кнопок "Начать отслеживание" и "Остановить отслеживание"
+        monitoring_buttons_layout = QHBoxLayout()
+        monitoring_buttons_layout.addWidget(self.stop_button)
+        monitoring_buttons_layout.addWidget(self.start_button)
+
+        # Создаем макет для группы
+        utilities_layout = QVBoxLayout()
+        utilities_layout.addWidget(self.test_launch_button)
+        utilities_layout.addWidget(self.test_stop_button)
+        utilities_layout.addWidget(self.test_games_button)
+        self.utilities_group.setLayout(utilities_layout)
+
         layout = QVBoxLayout()
         layout.addWidget(self.epic_path_label)
         layout.addLayout(epic_layout)
         layout.addWidget(self.usb_path_label)
         layout.addLayout(usb_layout)
+        layout.addWidget(self.warning_label)
+        layout.addWidget(self.line)
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
-        layout.addWidget(self.start_button)
-        layout.addWidget(self.stop_button)
-        layout.addWidget(self.test_launch_button)  # Добавляем тестовую кнопку
-        layout.addWidget(self.line)  # Добавляем линию
+        layout.addLayout(monitoring_buttons_layout)
+        layout.addWidget(self.utilities_group)
 
         container = QWidget()
         container.setLayout(layout)
@@ -80,7 +112,7 @@ class MainWindow(QMainWindow):
 
         # Переменные
         self.epic_path = self.detect_epic_path()  # Автоматическое определение пути к Epic Games Store
-        self.usb_path = "E:/"  # Путь по умолчанию к флешке
+        self.usb_path = self.get_farthest_drive()  # Путь по умолчанию к флешке
         self.watcher = QFileSystemWatcher()
         self.copy_thread = None
         self.new_folder_path = None  # Путь к новой созданной папке
@@ -89,6 +121,12 @@ class MainWindow(QMainWindow):
         self.remaining_delay = self.delay_seconds  # Оставшееся время задержки
         self.epic_closed = False  # Флаг для отслеживания состояния Epic Games
         self.is_copying = False  # Флаг для отслеживания состояния копирования
+
+        # Новый таймер для проверки стабильности каталога
+        self.stability_timer = QTimer()
+        self.stability_timer.timeout.connect(self.start_copy_if_stable)
+        self.stability_delay = 5
+        self.last_change_time = 0  # Время последнего изменения
 
         # Инициализация полей
         self.epic_path_input.setText(self.epic_path)
@@ -107,14 +145,63 @@ class MainWindow(QMainWindow):
         self.watcher.directoryChanged.connect(self.on_directory_changed)
         self.timer.timeout.connect(self.update_delay)
 
+        # Автоматически подбираем размер окна
+        #self.adjustSize()
+
+    def set_widgets_enabled(self, enabled):
+        """
+        Включает или отключает виджеты для выбора путей.
+        :param enabled: Если True, виджеты включаются. Если False, отключаются.
+        """
+        self.epic_path_input.setEnabled(enabled)
+        self.epic_path_button.setEnabled(enabled)
+        self.usb_path_input.setEnabled(enabled)
+        self.usb_path_button.setEnabled(enabled)
+
     def detect_epic_path(self):
-        """Автоматическое определение пути к Epic Games Store."""
-        epic_path = find_epic_games_path()
-        if epic_path:
-            return epic_path
-        else:
-            QMessageBox.critical(self, "Ошибка", "Epic Games Store не найден на компьютере!")
-            return ""
+        """
+        Автоматическое определение пути к Epic Games Store.
+        Возвращает путь с наибольшим количеством установленных игр.
+        """
+        # Получаем список установленных игр
+        installed_games, invalid_path_games = get_installed_games()
+
+        if not installed_games:
+            return find_epic_games_path()
+
+        # Считаем количество игр для каждого пути
+        path_count = defaultdict(int)
+        for game in installed_games:
+            parent_path = os.path.dirname(game["path"])  # Получаем родительскую папку
+            path_count[parent_path] += 1
+
+        # Находим путь с наибольшим количеством игр
+        most_common_path = max(path_count, key=path_count.get)
+
+        return most_common_path
+
+    def get_available_drives(self):
+        """Возвращает список доступных дисков."""
+        drives = []
+        for drive in range(ord('A'), ord('Z') + 1):
+            drive_letter = chr(drive) + ":\\"
+            if os.path.exists(drive_letter):
+                drives.append(drive_letter)
+        return drives
+
+    def get_farthest_drive(self):
+        """Возвращает самый дальний доступный диск."""
+        drives = self.get_available_drives()
+        if drives:
+            return drives[-1]  # Возвращаем последний диск в списке
+        return "C:\\"  # Если диски не найдены, возвращаем C:\ по умолчанию
+
+    def get_nearest_drive(self):
+        """Возвращает самый ранний доступный диск."""
+        drives = self.get_available_drives()
+        if drives:
+            return drives[0]
+        return "C:\\"
 
     def select_epic_path(self):
         """Открывает диалог выбора каталога Epic Games Store."""
@@ -133,9 +220,9 @@ class MainWindow(QMainWindow):
     def start_monitoring(self):
         """Начинает отслеживание каталога."""
         if not os.path.exists(self.epic_path):
-            QMessageBox.critical(self, "Ошибка", "Каталог Epic Games Store не найден!")
+            QMessageBox.critical(self, "Ошибка", "Каталог Epic Games не найден!")
             return
-
+        self.set_widgets_enabled(False)
         self.watcher.addPath(self.epic_path)
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
@@ -146,27 +233,55 @@ class MainWindow(QMainWindow):
         self.watcher.removePath(self.epic_path)
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
-        self.status_bar.showMessage("Отслеживание остановлено.")
+        self.status_bar.showMessage("Ожидание")
+        self.set_widgets_enabled(True)
 
     def on_directory_changed(self, path):
         """Обрабатывает изменения в каталоге."""
         if self.is_copying:  # Если идет копирование, игнорируем изменения
             return
 
-        # Проверяем, появилась ли новая папка
-        folders = [f for f in os.listdir(path) if os.path.isdir(os.path.join(path, f))]
-        if folders:
-            self.new_folder_path = os.path.join(path, folders[-1])  # Последняя созданная папка
-            self.watcher.addPath(self.new_folder_path)  # Начинаем отслеживать новую папку
+        try:
+            # Проверяем, существует ли каталог
+            if not os.path.exists(path):
+                self.status_bar.showMessage(f"Каталог не найден: {path}")
+                return
 
-        # Проверяем, появился ли файл в новой папке
-        if self.new_folder_path and os.path.exists(self.new_folder_path):
-            files = [f for f in os.listdir(self.new_folder_path) if os.path.isfile(os.path.join(self.new_folder_path, f))]
-            if files:
-                # Запускаем таймер на 5 секунд
-                self.remaining_delay = self.delay_seconds
-                self.timer.start(1000)  # Таймер срабатывает каждую секунду
-                self.status_bar.showMessage(f"Ожидание {self.remaining_delay} сек...")
+            # Проверяем, появилась ли новая папка
+            folders = [f for f in os.listdir(path) if os.path.isdir(os.path.join(path, f))]
+            if folders:
+                self.new_folder_path = os.path.join(path, folders[-1])  # Последняя созданная папка
+                self.watcher.addPath(self.new_folder_path)  # Начинаем отслеживать новую папку
+
+            # Проверяем, появился ли файл в новой папке
+            if self.new_folder_path and os.path.exists(self.new_folder_path):
+                files = [f for f in os.listdir(self.new_folder_path) if os.path.isfile(os.path.join(self.new_folder_path, f))]
+                if files:
+                    # Запускаем таймер стабильности
+                    self.stability_timer.start(1000)  # Проверка каждую секунду
+                    self.status_bar.showMessage(f"Ожидание стабильности")
+
+        except FileNotFoundError:
+            self.status_bar.showMessage(f"Каталог не найден: {path}")
+        except PermissionError:
+            self.status_bar.showMessage(f"Нет доступа к каталогу: {path}")
+        except Exception as e:
+            self.status_bar.showMessage(f"Ошибка: {str(e)}")
+    
+    def start_copy_if_stable(self):
+        """Проверяет, завершены ли изменения, и начинает копирование."""
+        current_time = time.time()
+        if current_time - self.last_change_time >= self.stability_delay:
+            # Если изменений не было в течение 10 секунд, останавливаем таймер и начинаем копирование
+            self.stability_timer.stop()
+            if not self.epic_closed:
+                self.stop_epic()
+                self.epic_closed = True
+            self.start_copy(self.usb_path, self.new_folder_path)
+        else:
+            # Если изменения продолжаются, обновляем статус
+            remaining_time = int(self.stability_delay - (current_time - self.last_change_time))
+            self.status_bar.showMessage(f"Ожидание стабильности... {remaining_time} сек")
 
     def update_delay(self):
         """Обновляет отсчет задержки."""
@@ -183,10 +298,16 @@ class MainWindow(QMainWindow):
     def stop_epic(self):
         """Останавливает Epic Games Store."""
         try:
-            os.system(f"taskkill /f /im EpicGamesLauncher.exe")
+            for proc in psutil.process_iter(['pid', 'name']):
+                if proc.info['name'] == 'EpicGamesLauncher.exe':
+                    proc.kill()
             QMessageBox.information(self, "Успех", "Epic Games Store остановлен.")
+        except psutil.NoSuchProcess:
+            QMessageBox.critical(self, "Ошибка", "Процесс Epic Games Launcher не найден.")
+        except psutil.AccessDenied:
+            QMessageBox.critical(self, "Ошибка", "Недостаточно прав для завершения процесса.")
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось остановить Epic Games Store: {e}")
+            QMessageBox.critical(self, "Ошибка", f"Произошла непредвиденная ошибка: {e}")
 
     def start_copy(self, src, dst):
         """Начинает копирование данных."""
@@ -208,7 +329,7 @@ class MainWindow(QMainWindow):
         self.copy_thread.integrity_check_progress.connect(self.update_integrity_progress)
         self.copy_thread.start()
         self.status_bar.showMessage("Копирование")
-
+    
     def on_copy_finished(self):
         """Обрабатывает завершение копирования."""
         self.is_copying = False  # Сбрасываем флаг копирования
@@ -241,17 +362,15 @@ class MainWindow(QMainWindow):
         self.taskbar_progress.setValue(progress)
 
     def resume_epic(self):
-        """Возобновляет загрузку."""
-        launcher_path = os.path.join(self.epic_path, "EpicGamesLauncher.exe")
-        if os.path.exists(launcher_path):
-            try:
-                # Используем subprocess.Popen для запуска Epic Games Launcher
-                subprocess.Popen([launcher_path], shell=True)
-                QMessageBox.information(self, "Успех", "Epic Games Store запущен. Загрузка возобновлена.")
-            except Exception as e:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось запустить Epic Games Store: {e}")
-        else:
-            QMessageBox.critical(self, "Ошибка", "Файл EpicGamesLauncher.exe не найден!")
+        """Возобновляет загрузку через консольную команду."""
+        try:
+            # Используем команду start для запуска URI Epic Games Launcher
+            subprocess.run(["start", "com.epicgames.launcher://apps"], shell=True, check=True)
+            QMessageBox.information(self, "Успех", "Epic Games Store запущен")
+        except subprocess.CalledProcessError as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось запустить Epic Games Store: {e}")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла непредвиденная ошибка: {e}")
 
         # Возвращаем программу в исходное состояние
         self.stop_monitoring()  # Останавливаем отслеживание
@@ -263,4 +382,3 @@ class MainWindow(QMainWindow):
 
         # Скрываем прогресс на иконке в панели задач
         self.taskbar_progress.setVisible(False)
-        
