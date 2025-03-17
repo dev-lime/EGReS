@@ -18,9 +18,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Epic Games ReStore")
         self.setWindowIcon(QIcon(":/icon.ico"))
-        self.setGeometry(100, 100, 400, 420)  # Начальные размеры окна
+        self.setGeometry(100, 100, 400, 460)  # Начальные размеры окна
 
-        self.setFixedSize(400, 420)
+        self.setFixedSize(400, 460)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowMaximizeButtonHint)
 
         # Виджеты
@@ -88,11 +88,20 @@ class MainWindow(QMainWindow):
         monitoring_buttons_layout.addWidget(self.stop_button)
         monitoring_buttons_layout.addWidget(self.start_button)
 
-        # Создаем макет для группы
+        # Тестовые кнопки
+        self.test_create_button = QPushButton("Создать тестовую папку и файл", self)
+        self.test_create_button.clicked.connect(self.create_test_folder_and_file)
+
+        self.test_modify_button = QPushButton("Симулировать изменение файла", self)
+        self.test_modify_button.clicked.connect(self.modify_test_file)
+
+        # Добавляем тестовые кнопки в группу "Инструменты"
         utilities_layout = QVBoxLayout()
         utilities_layout.addWidget(self.test_launch_button)
         utilities_layout.addWidget(self.test_stop_button)
         utilities_layout.addWidget(self.test_games_button)
+        utilities_layout.addWidget(self.test_create_button)
+        utilities_layout.addWidget(self.test_modify_button)
         self.utilities_group.setLayout(utilities_layout)
 
         layout = QVBoxLayout()
@@ -153,6 +162,50 @@ class MainWindow(QMainWindow):
         # Автоматически подбираем размер окна
         #self.adjustSize()
 
+
+    def create_test_folder_and_file(self):
+        """Создает тестовую папку и файл в каталоге Epic Games."""
+        test_folder_path = os.path.join(self.epic_path, "test_folder")
+        test_file_path = os.path.join(test_folder_path, "test_file.txt")
+
+        try:
+            # Создаем папку, если её нет
+            os.makedirs(test_folder_path, exist_ok=True)
+
+            # Создаем тестовый файл
+            with open(test_file_path, "w", encoding="utf-8") as f:
+                f.write("Это тестовый файл.")
+
+            QMessageBox.information(self, "Успех", f"Создана тестовая папка и файл:\n{test_file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось создать тестовую папку или файл: {e}")
+
+    def modify_test_file(self):
+        """Симулирует изменение тестового файла через несколько секунд."""
+        test_folder_path = os.path.join(self.epic_path, "test_folder")
+        test_file_path = os.path.join(test_folder_path, "test_file.txt")
+
+        if not os.path.exists(test_file_path):
+            QMessageBox.warning(self, "Ошибка", "Тестовый файл не найден. Сначала создайте его.")
+            return
+
+        # Запускаем таймер для изменения файла через 5 секунд
+        self.modify_timer = QTimer()
+        self.modify_timer.timeout.connect(lambda: self._modify_file(test_file_path))
+        self.modify_timer.start(5000)  # 5 секунд
+        QMessageBox.information(self, "Информация", "Файл будет изменен через 5 секунд.")
+
+    def _modify_file(self, file_path):
+        """Изменяет содержимое тестового файла."""
+        try:
+            with open(file_path, "a", encoding="utf-8") as f:
+                f.write("\nФайл был изменен.")
+            QMessageBox.information(self, "Успех", f"Файл изменен:\n{file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось изменить файл: {e}")
+        finally:
+            self.modify_timer.stop()
+            
     def load_settings(self):
         """Загружает сохраненные настройки из файла."""
         if os.path.exists(self.settings_file):
@@ -367,13 +420,14 @@ class MainWindow(QMainWindow):
         self.is_copying = True  # Устанавливаем флаг копирования
         self.watcher.removePath(self.epic_path)  # Отключаем отслеживание
 
+        # Создаем поток копирования
         self.copy_thread = CopyThread(src, dst_path)
         self.copy_thread.progress_updated.connect(self.update_progress)
         self.copy_thread.copy_finished.connect(self.on_copy_finished)
         self.copy_thread.integrity_check_progress.connect(self.update_integrity_progress)
         self.copy_thread.start()
         self.status_bar.showMessage("Копирование")
-    
+
     def on_copy_finished(self):
         """Обрабатывает завершение копирования."""
         self.is_copying = False  # Сбрасываем флаг копирования
@@ -426,3 +480,4 @@ class MainWindow(QMainWindow):
 
         # Скрываем прогресс на иконке в панели задач
         self.taskbar_progress.setVisible(False)
+        

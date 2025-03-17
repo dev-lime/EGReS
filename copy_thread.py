@@ -13,25 +13,38 @@ class CopyThread(QThread):
 
     def __init__(self, src, dst):
         super().__init__()
-        self.src = src
-        self.dst = dst
+        self.src = src  # Путь к папке на флешке
+        self.dst = dst  # Путь к папке в Epic Games
         self.total_size = 0
         self.copied_size = 0
         self.copied_files = 0
-        self.total_files = 0  # Добавляем атрибут для хранения общего количества файлов
+        self.total_files = 0  # Общее количество файлов
         self.running = True
 
     def run(self):
-        self.calculate_total_size(self.src)
-        self.count_total_files(self.src)  # Подсчитываем общее количество файлов
-        self.copy_files(self.src, self.dst)
-        self.copy_finished.emit()
-        self.check_integrity(self.src, self.dst)
+        """Основной метод, выполняющий копирование и проверку целостности."""
+        try:
+            # Вычисляем общий размер и количество файлов
+            self.calculate_total_size(self.src)
+            self.count_total_files(self.src)
+
+            # Копируем файлы с заменой
+            self.copy_files(self.src, self.dst)
+
+            # Проверяем целостность скопированных файлов
+            self.check_integrity(self.src, self.dst)
+
+            # Если всё успешно, завершаем
+            self.copy_finished.emit()
+        except Exception as e:
+            QMessageBox.critical(None, "Ошибка", f"Произошла ошибка при копировании: {e}")
 
     def calculate_total_size(self, path):
         """Вычисляет общий размер данных для копирования."""
         if os.path.isdir(path):
             for item in os.listdir(path):
+                if item.startswith('.'):  # Игнорируем папки, начинающиеся с точки
+                    continue
                 item_path = os.path.join(path, item)
                 if os.path.isdir(item_path):
                     self.calculate_total_size(item_path)
@@ -44,6 +57,8 @@ class CopyThread(QThread):
         """Подсчитывает общее количество файлов."""
         if os.path.isdir(path):
             for item in os.listdir(path):
+                if item.startswith('.'):  # Игнорируем папки, начинающиеся с точки
+                    continue
                 item_path = os.path.join(path, item)
                 if os.path.isdir(item_path):
                     self.count_total_files(item_path)
@@ -53,13 +68,15 @@ class CopyThread(QThread):
             self.total_files += 1
 
     def copy_files(self, src, dst):
-        """Копирует файлы с отображением прогресса."""
+        """Копирует файлы с заменой, исключая папки, начинающиеся с точки."""
         if not self.running:
             return
 
         if os.path.isdir(src):
             os.makedirs(dst, exist_ok=True)
             for item in os.listdir(src):
+                if item.startswith('.'):  # Игнорируем папки, начинающиеся с точки
+                    continue
                 src_item = os.path.join(src, item)
                 dst_item = os.path.join(dst, item)
                 self.copy_files(src_item, dst_item)
@@ -85,12 +102,14 @@ class CopyThread(QThread):
         """Проверяет целостность файлов."""
         if os.path.isdir(src):
             for item in os.listdir(src):
+                if item.startswith('.'):  # Игнорируем папки, начинающиеся с точки
+                    continue
                 src_item = os.path.join(src, item)
                 dst_item = os.path.join(dst, item)
                 self.check_integrity(src_item, dst_item)
         else:
             if not self.verify_file_integrity(src, dst):
-                QMessageBox.critical(self, "Ошибка", f"Файл {src} не прошел проверку целостности!")
+                QMessageBox.critical(None, "Ошибка", f"Файл {src} не прошел проверку целостности!")
             self.integrity_check_progress.emit(int((self.copied_files / self.total_files) * 100))
 
     def verify_file_integrity(self, src, dst):
