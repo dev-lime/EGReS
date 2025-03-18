@@ -41,11 +41,13 @@ class MainWindow(QMainWindow):
         self.epic_path_label = QLabel("Путь к каталогу Epic Games Store:", self)
         self.epic_path_input = QLineEdit(self)
         self.epic_path_button = QPushButton("...", self)
+        self.epic_path_button.clicked.connect(self.select_epic_path)
         self.epic_path_button.setFixedSize(30, 20)
 
         self.usb_path_label = QLabel("Путь к каталогу на флешке:", self)
         self.usb_path_input = QLineEdit(self)
         self.usb_path_button = QPushButton("...", self)
+        self.usb_path_button.clicked.connect(self.select_usb_path)
         self.usb_path_button.setFixedSize(30, 20)
 
         self.warning_label = QLabel("ВНИМАНИЕ! Имена каталогов должны совпадать", self)
@@ -55,8 +57,11 @@ class MainWindow(QMainWindow):
         self.line.setFrameShadow(QFrame.Sunken)
 
         self.progress_bar = QProgressBar(self)
+        self.progress_bar.setValue(0)
         self.start_button = QPushButton("Начать отслеживание", self)
+        self.start_button.clicked.connect(self.start_monitoring)
         self.stop_button = QPushButton("Остановить отслеживание", self)
+        self.stop_button.clicked.connect(self.stop_monitoring)
         self.stop_button.setEnabled(False)
         self.status_label = QLabel("", self)
 
