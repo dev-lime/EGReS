@@ -6,35 +6,28 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 
 class CopyThread(QThread):
-    # Сигналы для обновления прогресса и статистики
-    progress_updated = pyqtSignal(int, float, float, int)  # прогресс, скорость (МБ/с), оставшееся время, скопировано файлов
+    """Поток для копирования файлов и проверки целостности."""
+    progress_updated = pyqtSignal(int, float, float, int)
     copy_finished = pyqtSignal()
-    integrity_check_progress = pyqtSignal(int)  # прогресс проверки целостности
+    integrity_check_progress = pyqtSignal(int)
 
     def __init__(self, src, dst):
         super().__init__()
-        self.src = src  # Путь к папке на флешке
-        self.dst = dst  # Путь к папке в Epic Games
+        self.src = src
+        self.dst = dst
         self.total_size = 0
         self.copied_size = 0
         self.copied_files = 0
-        self.total_files = 0  # Общее количество файлов
+        self.total_files = 0
         self.running = True
 
     def run(self):
         """Основной метод, выполняющий копирование и проверку целостности."""
         try:
-            # Вычисляем общий размер и количество файлов
             self.calculate_total_size(self.src)
             self.count_total_files(self.src)
-
-            # Копируем файлы с заменой
             self.copy_files(self.src, self.dst)
-
-            # Проверяем целостность скопированных файлов
             self.check_integrity(self.src, self.dst)
-
-            # Если всё успешно, завершаем
             self.copy_finished.emit()
         except Exception as e:
             QMessageBox.critical(None, "Ошибка", f"Произошла ошибка при копировании: {e}")
@@ -43,7 +36,7 @@ class CopyThread(QThread):
         """Вычисляет общий размер данных для копирования."""
         if os.path.isdir(path):
             for item in os.listdir(path):
-                if item.startswith('.'):  # Игнорируем папки, начинающиеся с точки
+                if item.startswith('.'):
                     continue
                 item_path = os.path.join(path, item)
                 if os.path.isdir(item_path):
@@ -57,7 +50,7 @@ class CopyThread(QThread):
         """Подсчитывает общее количество файлов."""
         if os.path.isdir(path):
             for item in os.listdir(path):
-                if item.startswith('.'):  # Игнорируем папки, начинающиеся с точки
+                if item.startswith('.'):
                     continue
                 item_path = os.path.join(path, item)
                 if os.path.isdir(item_path):
@@ -75,7 +68,7 @@ class CopyThread(QThread):
         if os.path.isdir(src):
             os.makedirs(dst, exist_ok=True)
             for item in os.listdir(src):
-                if item.startswith('.'):  # Игнорируем папки, начинающиеся с точки
+                if item.startswith('.'):
                     continue
                 src_item = os.path.join(src, item)
                 dst_item = os.path.join(dst, item)
@@ -87,14 +80,14 @@ class CopyThread(QThread):
                 while True:
                     if not self.running:
                         break
-                    chunk = f_src.read(1024 * 1024)  # Чтение по 1 МБ
+                    chunk = f_src.read(1024 * 1024)
                     if not chunk:
                         break
                     f_dst.write(chunk)
                     self.copied_size += len(chunk)
                     elapsed_time = time.time() - start_time
-                    speed = (self.copied_size / (1024 * 1024)) / elapsed_time if elapsed_time > 0 else 0  # Скорость в МБ/с
-                    remaining_time = (self.total_size - self.copied_size) / (speed * 1024 * 1024) if speed > 0 else 0  # Оставшееся время в секундах
+                    speed = (self.copied_size / (1024 * 1024)) / elapsed_time if elapsed_time > 0 else 0
+                    remaining_time = (self.total_size - self.copied_size) / (speed * 1024 * 1024) if speed > 0 else 0
                     progress = int((self.copied_size / self.total_size) * 100)
                     self.progress_updated.emit(progress, speed, remaining_time, self.copied_files)
 
@@ -102,7 +95,7 @@ class CopyThread(QThread):
         """Проверяет целостность файлов."""
         if os.path.isdir(src):
             for item in os.listdir(src):
-                if item.startswith('.'):  # Игнорируем папки, начинающиеся с точки
+                if item.startswith('.'):
                     continue
                 src_item = os.path.join(src, item)
                 dst_item = os.path.join(dst, item)
