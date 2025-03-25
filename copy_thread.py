@@ -7,7 +7,7 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 class CopyThread(QThread):
     """Поток для копирования файлов и проверки целостности."""
-    progress_updated = pyqtSignal(int, float, float, int)
+    progress_updated = pyqtSignal(int, float, int, int, str)
     copy_finished = pyqtSignal()
     integrity_check_progress = pyqtSignal(int)
 
@@ -20,10 +20,12 @@ class CopyThread(QThread):
         self.copied_files = 0
         self.total_files = 0
         self.running = True
+        self.start_time = 0
 
     def run(self):
         """Основной метод, выполняющий копирование и проверку целостности."""
         try:
+            self.start_time = time.time()
             self.calculate_total_size(self.src)
             self.count_total_files(self.src)
             self.copy_files(self.src, self.dst)
@@ -36,8 +38,6 @@ class CopyThread(QThread):
         """Вычисляет общий размер данных для копирования."""
         if os.path.isdir(path):
             for item in os.listdir(path):
-                if item.startswith('.'):
-                    continue
                 item_path = os.path.join(path, item)
                 if os.path.isdir(item_path):
                     self.calculate_total_size(item_path)
@@ -50,8 +50,6 @@ class CopyThread(QThread):
         """Подсчитывает общее количество файлов."""
         if os.path.isdir(path):
             for item in os.listdir(path):
-                if item.startswith('.'):
-                    continue
                 item_path = os.path.join(path, item)
                 if os.path.isdir(item_path):
                     self.count_total_files(item_path)
@@ -61,21 +59,20 @@ class CopyThread(QThread):
             self.total_files += 1
 
     def copy_files(self, src, dst):
-        """Копирует файлы с заменой, исключая папки, начинающиеся с точки."""
+        """Копирует файлы с заменой."""
         if not self.running:
             return
 
         if os.path.isdir(src):
             os.makedirs(dst, exist_ok=True)
             for item in os.listdir(src):
-                if item.startswith('.'):
-                    continue
                 src_item = os.path.join(src, item)
                 dst_item = os.path.join(dst, item)
                 self.copy_files(src_item, dst_item)
         else:
             self.copied_files += 1
-            start_time = time.time()
+            file_start_time = time.time()
+            
             with open(src, 'rb') as f_src, open(dst, 'wb') as f_dst:
                 while True:
                     if not self.running:
@@ -85,34 +82,49 @@ class CopyThread(QThread):
                         break
                     f_dst.write(chunk)
                     self.copied_size += len(chunk)
-                    elapsed_time = time.time() - start_time
+                    elapsed_time = time.time() - self.start_time
                     speed = (self.copied_size / (1024 * 1024)) / elapsed_time if elapsed_time > 0 else 0
-                    remaining_time = (self.total_size - self.copied_size) / (speed * 1024 * 1024) if speed > 0 else 0
                     progress = int((self.copied_size / self.total_size) * 100)
-                    self.progress_updated.emit(progress, speed, remaining_time, self.copied_files)
+                    remaining_files = self.total_files - self.copied_files
+                    if speed > 0:
+                        remaining_bytes = self.total_size - self.copied_size
+                        remaining_seconds = remaining_bytes / (speed * 1024 * 1024)
+                        remaining_time_str = self.format_time(remaining_seconds)
+                    else:
+                        remaining_time_str = "--:--:--"
+                    
+                    self.progress_updated.emit(
+                        progress, 
+                        speed, 
+                        remaining_files, 
+                        self.total_files,
+                        remaining_time_str
+                    )
 
     def check_integrity(self, src, dst):
         """Проверяет целостность файлов."""
+        checked_files = 0
         if os.path.isdir(src):
             for item in os.listdir(src):
-                if item.startswith('.'):
-                    continue
                 src_item = os.path.join(src, item)
                 dst_item = os.path.join(dst, item)
                 self.check_integrity(src_item, dst_item)
         else:
             if not self.verify_file_integrity(src, dst):
                 QMessageBox.critical(None, "Ошибка", f"Файл {src} не прошел проверку целостности!")
-            self.integrity_check_progress.emit(int((self.copied_files / self.total_files) * 100))
+            checked_files += 1
+            progress = int((checked_files / self.total_files) * 100)
+            self.integrity_check_progress.emit(progress)
 
     def verify_file_integrity(self, src, dst):
         """Проверяет целостность файла с помощью хеша."""
+        if not os.path.exists(dst):
+            return False
+            
         if os.path.getsize(src) != os.path.getsize(dst):
             return False
 
-        hash_src = self.calculate_md5(src)
-        hash_dst = self.calculate_md5(dst)
-        return hash_src == hash_dst
+        return self.calculate_md5(src) == self.calculate_md5(dst)
 
     def calculate_md5(self, file_path):
         """Вычисляет MD5 хеш файла."""
@@ -121,4 +133,21 @@ class CopyThread(QThread):
             for chunk in iter(lambda: f.read(4096), b""):
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
+    
+    def format_time(seconds):
+        """Форматирует время в вид (дни, часы, минуты, секунды)"""
+        if seconds < 0:
+            return "00:00:00"
+        
+        seconds = int(seconds)
+        days, seconds = divmod(seconds, 86400)
+        hours, seconds = divmod(seconds, 3600)
+        minutes, seconds = divmod(seconds, 60)
+        
+        if days > 0:
+            return f"{days}д {hours:02d}:{minutes:02d}:{seconds:02d}"
+        elif hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        else:
+            return f"{minutes:02d}:{seconds:02d}"
     
