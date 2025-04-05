@@ -1,3 +1,4 @@
+#pyinstaller --onefile --windowed --icon=icon.ico --name="EGReS" main.py
 import sys
 from PyQt5.QtWidgets import QApplication
 from ui import MainWindow

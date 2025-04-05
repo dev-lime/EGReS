@@ -466,29 +466,34 @@ class MainWindow(QMainWindow):
 
     def start_copy(self, src, dst):
         """Начинает копирование."""
-        if not os.path.exists(src):
-            error_msg = f"❌ Ошибка: исходная папка не найдена на флешке: {src}"
+        try:
+            if not os.path.exists(src):
+                error_msg = f"❌ Ошибка: исходная папка не найдена на флешке: {src}"
+                self.status_bar.showMessage(error_msg)
+                QMessageBox.critical(self, "Ошибка", error_msg)
+                return
+
+            # Проверяем доступ на запись в целевую директорию
+            test_file = os.path.join(dst, "test_write.tmp")
+            try:
+                with open(test_file, "w") as f:
+                    f.write("test")
+                os.remove(test_file)
+            except IOError as e:
+                error_msg = f"❌ Нет прав на запись в целевую директорию: {dst}\n{str(e)}"
+                self.status_bar.showMessage(error_msg)
+                QMessageBox.critical(self, "Ошибка", error_msg)
+                return
+
+            folder_name = os.path.basename(src)
+            self.status_bar.showMessage(f"📊 Подготовка к копированию '{folder_name}'...")
+            self.is_copying = True
+            self.watcher.removePath(self.epic_path)
+            # ... остальной код метода
+        except Exception as e:
+            error_msg = f"❌ Ошибка при подготовке к копированию: {str(e)}"
             self.status_bar.showMessage(error_msg)
             QMessageBox.critical(self, "Ошибка", error_msg)
-            return
-
-        folder_name = os.path.basename(src)
-        self.status_bar.showMessage(f"📊 Подготовка к копированию '{folder_name}'...")
-        self.is_copying = True
-        self.watcher.removePath(self.epic_path)
-        total_size = sum(os.path.getsize(os.path.join(dirpath, filename)) 
-                    for dirpath, dirnames, filenames in os.walk(src)
-                    for filename in filenames)
-        size_mb = total_size / (1024 * 1024)
-        self.status_bar.showMessage(
-            f"📦 Копирование '{folder_name}': "
-            f"{len(os.listdir(src))} файлов, {size_mb:.2f} MB"
-        )
-        self.copy_thread = CopyThread(src, dst)
-        self.copy_thread.progress_updated.connect(self.update_progress)
-        self.copy_thread.copy_finished.connect(self.on_copy_finished)
-        self.copy_thread.integrity_check_progress.connect(self.update_integrity_progress)
-        self.copy_thread.start()
 
     def on_copy_finished(self):
         """Завершение копирования."""

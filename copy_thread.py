@@ -28,11 +28,21 @@ class CopyThread(QThread):
             self.start_time = time.time()
             self.calculate_total_size(self.src)
             self.count_total_files(self.src)
+            
+            if not os.path.exists(self.src):
+                raise FileNotFoundError(f"Исходный путь не существует: {self.src}")
+                
+            if not os.path.exists(os.path.dirname(self.dst)):
+                os.makedirs(os.path.dirname(self.dst), exist_ok=True)
+                
             self.copy_files(self.src, self.dst)
             self.check_integrity(self.src, self.dst)
             self.copy_finished.emit()
         except Exception as e:
-            QMessageBox.critical(None, "Ошибка", f"Произошла ошибка при копировании: {e}")
+            error_msg = f"Произошла ошибка при копировании: {str(e)}"
+            self.copy_finished.emit()  # Чтобы разблокировать интерфейс
+            # Используем лямбду для отложенного вызова, так как мы не в основном потоке
+            self.progress_updated.connect(lambda: QMessageBox.critical(None, "Ошибка", error_msg))
 
     def calculate_total_size(self, path):
         """Вычисляет общий размер данных для копирования."""
@@ -134,7 +144,7 @@ class CopyThread(QThread):
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
     
-    def format_time(seconds):
+    def format_time(self, seconds):  # Добавьте self
         """Форматирует время в вид (дни, часы, минуты, секунды)"""
         if seconds < 0:
             return "00:00:00"
